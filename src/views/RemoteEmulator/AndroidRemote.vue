@@ -113,6 +113,7 @@ const isIgnore = ref(true);
 const isVisible = ref(false);
 let imgWidth = 0;
 let imgHeight = 0;
+let sslEnabled = false;
 // 旋转状态 // 0 90 180 270
 const directionStatus = {
   value: -1,
@@ -497,38 +498,87 @@ const setImgData = () => {
   isShowImg.value = true;
 };
 const openSocket = (host, port, key, udId) => {
+  console.log(udId,key)
   if ('WebSocket' in window) {
     //
-    websocket = new WebSocket(
-      `ws://${host}:${port}/websockets/android/${key}/${udId}/${localStorage.getItem(
-        'SonicToken'
-      )}`
-    );
-    //
-    __Scrcpy = new Scrcpy({
-      socketURL: `ws://${host}:${port}/websockets/android/screen/${key}/${udId}/${localStorage.getItem(
-        'SonicToken'
-      )}`,
-      node: 'scrcpy-video',
-      onmessage: screenWebsocketOnmessage,
-      excuteMode: screenMode.value,
-    });
-    screenWebsocket = __Scrcpy.websocket;
-    changeScreenMode(screenMode.value, 1);
-    //
-    terminalWebsocket = new WebSocket(
-      `ws://${host}:${port}/websockets/android/terminal/${key}/${udId}/${localStorage.getItem(
-        'SonicToken'
-      )}`
-    );
+    if (sslEnabled){
+      const protocol = window.location.protocol
+      const hostname = window.location.hostname
+      const serverPort = window.location.port
+      const  wsSchema = protocol === 'https:' ? 'wss://':'ws://';
+      let baseUrl = wsSchema+hostname
+      if (serverPort !== 80){
+        baseUrl+=':'+serverPort
+      }
+
+      //连接到websocket hub,假设服务端与前端域名相同，如果不同，需要通过接口获取
+      websocket = new WebSocket(
+          `${baseUrl}/hub/android/${key}/${udId}/${localStorage.getItem('SonicToken')}/${host}/${port}`
+      );
+      __Scrcpy = new Scrcpy({
+        socketURL: `${baseUrl}/hub/android/screen/${key}/${udId}/${localStorage.getItem('SonicToken')}/${host}/${port}`,
+        node: 'scrcpy-video',
+        onmessage: screenWebsocketOnmessage,
+        excuteMode: screenMode.value,
+      });
+      screenWebsocket = __Scrcpy.websocket;
+      changeScreenMode(screenMode.value, 1);
+      //
+      terminalWebsocket = new WebSocket(
+          `${baseUrl}/hub/android/terminal/${key}/${udId}/${localStorage.getItem('SonicToken')}/${host}/${port}`
+      );
+    }else {
+      websocket = new WebSocket(
+          `ws://${host}:${port}/websockets/android/${key}/${udId}/${localStorage.getItem(
+              'SonicToken'
+          )}`
+      );
+      //
+      __Scrcpy = new Scrcpy({
+        socketURL: `ws://${host}:${port}/websockets/android/screen/${key}/${udId}/${localStorage.getItem(
+            'SonicToken'
+        )}`,
+        node: 'scrcpy-video',
+        onmessage: screenWebsocketOnmessage,
+        excuteMode: screenMode.value,
+      });
+      screenWebsocket = __Scrcpy.websocket;
+      changeScreenMode(screenMode.value, 1);
+      //
+      terminalWebsocket = new WebSocket(
+          `ws://${host}:${port}/websockets/android/terminal/${key}/${udId}/${localStorage.getItem(
+              'SonicToken'
+          )}`
+      );
+    }
   } else {
     console.error($t('androidRemoteTS.noWebSocket'));
   }
   websocket.onmessage = websocketOnmessage;
   websocket.onclose = (e) => {};
+  websocket.onerror = (error) => {
+    console.error("WebSocket error:", error);
+  };
+  terminalWebsocket.onerror = (error) => {
+    console.error("terminalWebsocket error:", error);
+  };
   terminalWebsocket.onmessage = terminalWebsocketOnmessage;
   terminalWebsocket.onclose = (e) => {};
   driverLoading.value = true;
+  websocket.onopen = () => {
+    setInterval(() => {
+      if (websocket.readyState === WebSocket.OPEN) {
+        websocket.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 10000);
+  };
+  terminalWebsocket.onopen = () => {
+    setInterval(() => {
+      if (terminalWebsocket.readyState === WebSocket.OPEN) {
+        terminalWebsocket.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 10000);
+  };
 };
 const sendLogcat = () => {
   terminalWebsocket.send(
@@ -637,7 +687,7 @@ const terminalWebsocketOnmessage = (message) => {
   }
 };
 const screenWebsocketOnmessage = (message) => {
-  // console.log('screenWebsocketOnmessage', message.data);
+  console.log('screenWebsocketOnmessage', message.data);
   if (typeof message.data === 'object') {
     oldBlob = message.data;
     const blob = new Blob([message.data], { type: 'image/jpeg' });
@@ -1702,6 +1752,7 @@ onMounted(() => {
   } else {
     getProjectList();
   }
+  getSslConfig();
   getDeviceById(route.params.deviceId);
   store.commit('autoChangeCollapse');
   getRemoteTimeout();
@@ -1734,6 +1785,15 @@ const getIdleTimeout = () => {
   });
 };
 
+const getSslConfig = () =>{
+  axios.get("/controller/confList/getSslEnabled")
+      .then((resp)=>{
+        console.log(resp)
+        if (resp.code===2000){
+          sslEnabled = resp.data;
+        }
+      })
+}
 const checkAlive = () => {
   setInterval(() => {
     idleCount.value++;
